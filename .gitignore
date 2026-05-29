@@ -1,0 +1,40 @@
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# macOS
+.DS_Store
+macos/Flutter/ephemeral/
+macos/Flutter/GeneratedPluginRegistrant.swift
+macos/Pods/
+macos/Podfile.lock
+macos/Runner.xcworkspace/xcuserdata/
+macos/Runner.xcodeproj/xcuserdata/
+macos/Runner.xcodeproj/project.xcworkspace/xcuserdata/
+macos/Runner/GeneratedPluginRegistrant.*
+
+# Windows
+windows/flutter/ephemeral/
+windows/flutter/generated_plugin_registrant.*
+windows/flutter/generated_plugins.cmake
+windows/runner/Debug/
+windows/runner/Release/
+windows/runner/x64/
+
+# Native build outputs
+*.exe
+*.dll
+*.dylib
+*.so
+*.app
+
+# Logs
+*.log
