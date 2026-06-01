@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:forui/forui.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
@@ -18,6 +19,8 @@ Future<void> main() async {
     minimumSize: Size(800, 540),
     center: true,
     title: 'IPTV Player',
+    titleBarStyle: TitleBarStyle.hidden,
+    windowButtonVisibility: true,
   );
 
   await windowManager.waitUntilReadyToShow(windowOptions, () async {
@@ -51,6 +54,10 @@ class IptvApp extends StatelessWidget {
       child: MaterialApp(
         title: 'IPTV Player',
         debugShowCheckedModeBanner: false,
+        builder: (context, child) => FTheme(
+          data: FThemes.zinc.dark.desktop,
+          child: child ?? const SizedBox.shrink(),
+        ),
         themeMode: ThemeMode.dark,
         darkTheme: ThemeData(
           useMaterial3: true,
@@ -66,8 +73,8 @@ class IptvApp extends StatelessWidget {
         home: Consumer<AuthProvider>(
           builder: (context, auth, _) {
             if (auth.isLoading) {
-              return const Scaffold(
-                body: Center(child: CircularProgressIndicator()),
+              return const FScaffold(
+                child: Center(child: FCircularProgress()),
               );
             }
 

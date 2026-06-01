@@ -19,6 +19,7 @@ dependencies:
   shared_preferences: ^2.3.2
   cached_network_image: ^3.4.1
   window_manager: ^0.5.1
+  forui: ^0.22.3
 
 dev_dependencies:
   flutter_test:
@@ -27,3 +28,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  fonts:
+    - family: Bungee
+      fonts:
+        - asset: assets/fonts/Bungee-Regular.ttf

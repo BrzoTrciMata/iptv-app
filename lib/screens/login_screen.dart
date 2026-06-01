@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:forui/forui.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
@@ -12,12 +13,11 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _formKey = GlobalKey<FormState>();
   final _serverController = TextEditingController();
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
 
-  bool _obscurePassword = true;
+  bool _submitted = false;
 
   @override
   void dispose() {
@@ -31,74 +31,80 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
 
-    return Scaffold(
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 440),
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    'IPTV Player',
-                    style: Theme.of(context).textTheme.headlineMedium,
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 28),
-                  TextFormField(
-                    controller: _serverController,
-                    decoration: const InputDecoration(
-                      labelText: 'Server URL',
-                      hintText: 'http://example.com:8080',
-                    ),
-                    textInputAction: TextInputAction.next,
-                    validator: _requiredValidator,
-                  ),
-                  const SizedBox(height: 14),
-                  TextFormField(
-                    controller: _usernameController,
-                    decoration: const InputDecoration(labelText: 'Username'),
-                    textInputAction: TextInputAction.next,
-                    validator: _requiredValidator,
-                  ),
-                  const SizedBox(height: 14),
-                  TextFormField(
-                    controller: _passwordController,
-                    decoration: InputDecoration(
-                      labelText: 'Password',
-                      suffixIcon: IconButton(
-                        tooltip: _obscurePassword ? 'Prikazi' : 'Sakrij',
-                        onPressed: () {
-                          setState(() {
-                            _obscurePassword = !_obscurePassword;
-                          });
-                        },
-                        icon: Icon(
-                          _obscurePassword
-                              ? Icons.visibility
-                              : Icons.visibility_off,
+    return FScaffold(
+      childPad: false,
+      child: ColoredBox(
+        color: context.theme.colors.background,
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: FCard.raw(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'IPTV Player',
+                        style: context.theme.typography.xl2.copyWith(
+                          color: context.theme.colors.foreground,
+                          fontWeight: FontWeight.w800,
                         ),
+                        textAlign: TextAlign.center,
                       ),
-                    ),
-                    obscureText: _obscurePassword,
-                    onFieldSubmitted: (_) => _submit(),
-                    validator: _requiredValidator,
+                      const SizedBox(height: 8),
+                      Text(
+                        'Unesi Xtream login podatke',
+                        style: context.theme.typography.sm.copyWith(
+                          color: context.theme.colors.mutedForeground,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 26),
+                      FTextField(
+                        control: FTextFieldControl.managed(
+                          controller: _serverController,
+                        ),
+                        label: const Text('Server URL'),
+                        hint: 'http://example.com:8080',
+                        textInputAction: TextInputAction.next,
+                        error: _errorFor(_serverController.text),
+                      ),
+                      const SizedBox(height: 14),
+                      FTextField(
+                        control: FTextFieldControl.managed(
+                          controller: _usernameController,
+                        ),
+                        label: const Text('Username'),
+                        textInputAction: TextInputAction.next,
+                        error: _errorFor(_usernameController.text),
+                      ),
+                      const SizedBox(height: 14),
+                      FTextField.password(
+                        control: FTextFieldControl.managed(
+                          controller: _passwordController,
+                        ),
+                        label: const Text('Password'),
+                        onSubmit: (_) => _submit(),
+                        error: _errorFor(_passwordController.text),
+                      ),
+                      const SizedBox(height: 22),
+                      FButton(
+                        onPress: auth.isLoading ? null : _submit,
+                        prefix: auth.isLoading
+                            ? const SizedBox.square(
+                                dimension: 16,
+                                child: FCircularProgress(),
+                              )
+                            : const Icon(FLucideIcons.logIn, size: 18),
+                        child: Text(auth.isLoading ? 'Prijava...' : 'Login'),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 22),
-                  FilledButton(
-                    onPressed: auth.isLoading ? null : _submit,
-                    child: auth.isLoading
-                        ? const SizedBox.square(
-                            dimension: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Text('Login'),
-                  ),
-                ],
+                ),
               ),
             ),
           ),
@@ -107,15 +113,19 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  String? _requiredValidator(String? value) {
-    if (value == null || value.trim().isEmpty) {
-      return 'Polje je obavezno';
+  Widget? _errorFor(String value) {
+    if (!_submitted || value.trim().isNotEmpty) {
+      return null;
     }
-    return null;
+    return const Text('Polje je obavezno');
   }
 
   Future<void> _submit() async {
-    if (!(_formKey.currentState?.validate() ?? false)) {
+    setState(() => _submitted = true);
+
+    if (_serverController.text.trim().isEmpty ||
+        _usernameController.text.trim().isEmpty ||
+        _passwordController.text.trim().isEmpty) {
       return;
     }
 
