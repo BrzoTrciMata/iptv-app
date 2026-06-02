@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../models/media_catalog_item.dart';
+import '../models/media_credit.dart';
 import '../models/media_episode.dart';
 
 enum TmdbMediaType {
@@ -123,6 +124,60 @@ class TmdbMetadataService {
     }).toList(growable: false);
   }
 
+  Future<List<MediaCatalogItem>> personCredits(MediaCredit credit) async {
+    final personId = credit.tmdbId;
+    if (!isConfigured || personId == null) {
+      return const <MediaCatalogItem>[];
+    }
+
+    try {
+      final data = await _getMap('/person/$personId/combined_credits');
+      final cast = data['cast'];
+      if (cast is! List) {
+        return const <MediaCatalogItem>[];
+      }
+
+      final credits = cast.map(_asStringMap).nonNulls.where((item) {
+        final mediaType = _nullableStringFromAny(item['media_type']);
+        return mediaType == 'movie' || mediaType == 'tv';
+      }).toList(growable: false);
+      credits.sort((a, b) {
+        final popularityCompare = (_doubleFromAny(b['popularity']) ?? 0)
+            .compareTo(_doubleFromAny(a['popularity']) ?? 0);
+        if (popularityCompare != 0) {
+          return popularityCompare;
+        }
+        final aYear = _intFromAny(
+              _yearFromAny(
+                _firstNonEmpty([
+                  a['release_date'],
+                  a['first_air_date'],
+                ]),
+              ),
+            ) ??
+            0;
+        final bYear = _intFromAny(
+              _yearFromAny(
+                _firstNonEmpty([
+                  b['release_date'],
+                  b['first_air_date'],
+                ]),
+              ),
+            ) ??
+            0;
+        return bYear.compareTo(aYear);
+      });
+
+      final items = credits
+          .map(_itemFromPersonCredit)
+          .where((item) => item.id.isNotEmpty)
+          .toList(growable: false);
+      return items.take(40).toList(growable: false);
+    } catch (_) {
+      return const <MediaCatalogItem>[];
+    }
+  }
+
   Future<Map<String, MediaEpisode>> _loadTvEpisodes(
     int tmdbId,
     List<MediaEpisode> episodes,
@@ -228,9 +283,16 @@ class TmdbMetadataService {
         details['first_air_date'],
       ]),
       cast: _castFromCredits(credits),
+      credits: _creditsFromCredits(credits),
       director: type == TmdbMediaType.movie
           ? _crewFromCredits(credits, {'Director'})
           : _crewFromCredits(credits, {'Creator', 'Executive Producer'}),
+      directors: type == TmdbMediaType.movie
+          ? _crewCreditsFromCredits(credits, {'Director'})
+          : _crewCreditsFromCredits(
+              credits,
+              {'Creator', 'Executive Producer'},
+            ),
       tmdbId: _intFromAny(details['id']),
       metadataSource: 'tmdb',
     );
@@ -355,6 +417,115 @@ String? _castFromCredits(Map<String, dynamic>? credits) {
       .take(8)
       .join(', ');
   return cast.isEmpty ? null : cast;
+}
+
+List<MediaCredit> _creditsFromCredits(Map<String, dynamic>? credits) {
+  final rawCast = credits?['cast'];
+  if (rawCast is! List) {
+    return const <MediaCredit>[];
+  }
+
+  return rawCast
+      .map(_asStringMap)
+      .nonNulls
+      .map(
+        (person) => MediaCredit(
+          name: _nullableStringFromAny(person['name']) ?? '',
+          tmdbId: _intFromAny(person['id']),
+          role: _firstNonEmpty([
+            person['character'],
+            person['roles'] is List
+                ? (person['roles'] as List)
+                    .map(_asStringMap)
+                    .nonNulls
+                    .map((role) => _nullableStringFromAny(role['character']))
+                    .nonNulls
+                    .join(', ')
+                : null,
+          ]),
+          profileUrl: _imageUrl(person['profile_path'], 'w185'),
+        ),
+      )
+      .where((credit) => credit.name.isNotEmpty)
+      .take(12)
+      .toList(growable: false);
+}
+
+List<MediaCredit> _crewCreditsFromCredits(
+  Map<String, dynamic>? credits,
+  Set<String> jobs,
+) {
+  final rawCrew = credits?['crew'];
+  if (rawCrew is! List) {
+    return const <MediaCredit>[];
+  }
+
+  return rawCrew
+      .map(_asStringMap)
+      .nonNulls
+      .map((person) {
+        final job = _nullableStringFromAny(person['job']);
+        final roles = person['jobs'] is List
+            ? (person['jobs'] as List)
+                .map(_asStringMap)
+                .nonNulls
+                .map((role) => _nullableStringFromAny(role['job']))
+                .nonNulls
+                .toList(growable: false)
+            : const <String>[];
+        final matchedRoles = <String>{
+          if (job != null && jobs.contains(job)) job,
+          ...roles.where(jobs.contains),
+        }.toList(growable: false);
+        if (matchedRoles.isEmpty) {
+          return null;
+        }
+        return MediaCredit(
+          name: _nullableStringFromAny(person['name']) ?? '',
+          tmdbId: _intFromAny(person['id']),
+          role: matchedRoles.join(', '),
+          profileUrl: _imageUrl(person['profile_path'], 'w185'),
+        );
+      })
+      .nonNulls
+      .where((credit) => credit.name.isNotEmpty)
+      .take(8)
+      .toList(growable: false);
+}
+
+MediaCatalogItem _itemFromPersonCredit(Map<String, dynamic> json) {
+  final mediaType = _nullableStringFromAny(json['media_type']) ?? 'movie';
+  final id = _stringFromAny(json['id']);
+  return MediaCatalogItem(
+    id: 'tmdb:$mediaType:$id',
+    name: _firstNonEmpty([
+          json['title'],
+          json['name'],
+          json['original_title'],
+          json['original_name'],
+        ]) ??
+        '',
+    categoryId: '',
+    posterUrl: _imageUrl(json['poster_path'], 'w500'),
+    backdropUrl: _imageUrl(json['backdrop_path'], 'w1280'),
+    rating: _ratingFromAny(json['vote_average']),
+    plot: _nullableStringFromAny(json['overview']),
+    role: _nullableStringFromAny(json['character']),
+    releaseDate: _firstNonEmpty([
+      json['release_date'],
+      json['first_air_date'],
+    ]),
+    tmdbId: _intFromAny(json['id']),
+    metadataSource: 'tmdb',
+  );
+}
+
+String? _yearFromAny(Object? value) {
+  final text = _nullableStringFromAny(value);
+  if (text == null) {
+    return null;
+  }
+  return RegExp(r'\b(19|20)\d{2}\b').firstMatch(text)?.group(0);
 }
 
 String? _crewFromCredits(Map<String, dynamic>? credits, Set<String> jobs) {

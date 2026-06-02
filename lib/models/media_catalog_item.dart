@@ -1,3 +1,5 @@
+import 'media_credit.dart';
+
 class MediaCatalogItem {
   const MediaCatalogItem({
     required this.id,
@@ -11,7 +13,10 @@ class MediaCatalogItem {
     this.genre,
     this.releaseDate,
     this.cast,
+    this.role,
+    this.credits = const <MediaCredit>[],
     this.director,
+    this.directors = const <MediaCredit>[],
     this.tmdbId,
     this.metadataSource,
   });
@@ -27,7 +32,10 @@ class MediaCatalogItem {
   final String? genre;
   final String? releaseDate;
   final String? cast;
+  final String? role;
+  final List<MediaCredit> credits;
   final String? director;
+  final List<MediaCredit> directors;
   final int? tmdbId;
   final String? metadataSource;
 
@@ -43,7 +51,10 @@ class MediaCatalogItem {
     String? genre,
     String? releaseDate,
     String? cast,
+    String? role,
+    List<MediaCredit>? credits,
     String? director,
+    List<MediaCredit>? directors,
     int? tmdbId,
     String? metadataSource,
   }) {
@@ -59,7 +70,10 @@ class MediaCatalogItem {
       genre: genre ?? this.genre,
       releaseDate: releaseDate ?? this.releaseDate,
       cast: cast ?? this.cast,
+      role: role ?? this.role,
+      credits: credits ?? this.credits,
       director: director ?? this.director,
+      directors: directors ?? this.directors,
       tmdbId: tmdbId ?? this.tmdbId,
       metadataSource: metadataSource ?? this.metadataSource,
     );
@@ -78,7 +92,10 @@ class MediaCatalogItem {
       'genre': genre,
       'release_date': releaseDate,
       'cast': cast,
+      'role': role,
+      'credits': credits.map((credit) => credit.toJson()).toList(),
       'director': director,
+      'directors': directors.map((credit) => credit.toJson()).toList(),
       'tmdb_id': tmdbId,
       'metadata_source': metadataSource,
     };
@@ -120,7 +137,10 @@ class MediaCatalogItem {
       genre: _nullableStringFromAny(json['genre']),
       releaseDate: _nullableStringFromAny(json['release_date']),
       cast: _nullableStringFromAny(json['cast']),
+      role: _nullableStringFromAny(json['role']),
+      credits: _creditsFromStoredJson(json['credits']),
       director: _nullableStringFromAny(json['director']),
+      directors: _creditsFromStoredJson(json['directors']),
       tmdbId: _intFromAny(json['tmdb_id']),
       metadataSource: _nullableStringFromAny(json['metadata_source']),
     );
@@ -142,4 +162,15 @@ int? _intFromAny(Object? value) {
     return value.toInt();
   }
   return int.tryParse(value?.toString() ?? '');
+}
+
+List<MediaCredit> _creditsFromStoredJson(Object? value) {
+  if (value is! List) {
+    return const <MediaCredit>[];
+  }
+  return value
+      .whereType<Map>()
+      .map((json) => MediaCredit.fromJson(Map<String, dynamic>.from(json)))
+      .where((credit) => credit.name.isNotEmpty)
+      .toList(growable: false);
 }

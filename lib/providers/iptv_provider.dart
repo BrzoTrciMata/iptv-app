@@ -8,6 +8,7 @@ import '../models/epg_program.dart';
 import '../models/live_category.dart';
 import '../models/live_stream.dart';
 import '../models/media_catalog_item.dart';
+import '../models/media_credit.dart';
 import '../models/media_episode.dart';
 import '../models/watch_progress.dart';
 import '../services/tmdb_metadata_service.dart';
@@ -370,6 +371,10 @@ class IptvProvider extends ChangeNotifier {
         .toList(growable: false);
     notifyListeners();
     return enriched;
+  }
+
+  Future<List<MediaCatalogItem>> personCredits(MediaCredit credit) {
+    return _metadataService.personCredits(credit);
   }
 
   Future<bool> selectSeries({

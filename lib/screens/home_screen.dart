@@ -14,6 +14,7 @@ import '../models/epg_program.dart';
 import '../models/live_category.dart';
 import '../models/live_stream.dart';
 import '../models/media_catalog_item.dart';
+import '../models/media_credit.dart';
 import '../models/media_episode.dart';
 import '../models/watch_progress.dart';
 import '../providers/auth_provider.dart';
@@ -1157,6 +1158,7 @@ class _MediaLibraryPageState extends State<_MediaLibraryPage> {
           Positioned.fill(
             child: _MediaViewAllOverlay(
               rail: _viewAllRail!,
+              isMovie: isMovies,
               onDismissed: () => setState(() => _viewAllRail = null),
               onItemPressed: (item) {
                 setState(() => _viewAllRail = null);
@@ -1174,6 +1176,7 @@ class _MediaLibraryPageState extends State<_MediaLibraryPage> {
                     .toList(growable: false),
                 wide: true,
               ),
+              isMovie: isMovies,
               onDismissed: () => setState(() => _viewAllContinue = false),
               onItemPressed: (item) {
                 setState(() => _viewAllContinue = false);
@@ -1217,6 +1220,9 @@ class _MediaDetailOverlayState extends State<_MediaDetailOverlay> {
   final ScrollController _scrollController = ScrollController();
   double _scrollOffset = 0;
   bool _detailsSelected = false;
+  MediaCredit? _selectedCredit;
+  List<MediaCatalogItem>? _selectedCreditItems;
+  bool _loadingCreditItems = false;
 
   @override
   void initState() {
@@ -1238,6 +1244,25 @@ class _MediaDetailOverlayState extends State<_MediaDetailOverlay> {
       return;
     }
     setState(() => _scrollOffset = nextOffset);
+  }
+
+  void _openCredit(MediaCredit credit) {
+    setState(() {
+      _selectedCredit = credit;
+      _selectedCreditItems = null;
+      _loadingCreditItems = true;
+    });
+    unawaited(
+      context.read<IptvProvider>().personCredits(credit).then((items) {
+        if (!mounted || _selectedCredit != credit) {
+          return;
+        }
+        setState(() {
+          _selectedCreditItems = items;
+          _loadingCreditItems = false;
+        });
+      }),
+    );
   }
 
   @override
@@ -1354,9 +1379,10 @@ class _MediaDetailOverlayState extends State<_MediaDetailOverlay> {
                                           WrapCrossAlignment.center,
                                       children: [
                                         for (final value in metadata)
-                                          FBadge(
-                                            variant: FBadgeVariant.secondary,
-                                            child: Text(value),
+                                          _HeroMetadataBadge(
+                                            value: value,
+                                            isRating:
+                                                value == widget.item.rating,
                                           ),
                                       ],
                                     ),
@@ -1402,30 +1428,19 @@ class _MediaDetailOverlayState extends State<_MediaDetailOverlay> {
                               color: Colors.white.withValues(alpha: 0.12),
                             ),
                             const SizedBox(height: 14),
-                            Row(
-                              children: [
-                                _DetailTabButton(
-                                  selected: !_detailsSelected,
-                                  label: isSeries ? 'Episodes' : 'Overview',
-                                  onPressed: () {
-                                    setState(() => _detailsSelected = false);
-                                  },
-                                ),
-                                const SizedBox(width: 10),
-                                _DetailTabButton(
-                                  selected: _detailsSelected,
-                                  label: 'Details',
-                                  onPressed: () {
-                                    setState(() => _detailsSelected = true);
-                                  },
-                                ),
-                              ],
+                            _DetailTabBar(
+                              isSeries: isSeries,
+                              detailsSelected: _detailsSelected,
+                              onDetailsChanged: (selected) {
+                                setState(() => _detailsSelected = selected);
+                              },
                             ),
                             const SizedBox(height: 16),
                             if (_detailsSelected)
                               _MediaDetailsPanel(
                                 item: widget.item,
                                 categoryName: categoryName,
+                                onCreditPressed: _openCredit,
                               )
                             else if (isSeries)
                               _SeriesEpisodesPanel(
@@ -1445,6 +1460,21 @@ class _MediaDetailOverlayState extends State<_MediaDetailOverlay> {
                         ),
                       ),
                     ),
+                    if (_selectedCredit != null)
+                      Positioned.fill(
+                        child: _PersonCreditsOverlay(
+                          credit: _selectedCredit!,
+                          items: _selectedCreditItems,
+                          loading: _loadingCreditItems,
+                          onDismissed: () {
+                            setState(() {
+                              _selectedCredit = null;
+                              _selectedCreditItems = null;
+                              _loadingCreditItems = false;
+                            });
+                          },
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -1459,11 +1489,41 @@ class _MediaDetailOverlayState extends State<_MediaDetailOverlay> {
 List<String> _mediaMetadata(MediaCatalogItem item, String categoryName) {
   return [
     if (item.rating != null) item.rating!,
-    if (_yearFromDate(item.releaseDate) != null)
-      _yearFromDate(item.releaseDate)!,
+    if (_mediaYear(item) != null) _mediaYear(item)!,
     if (item.genre != null) item.genre!,
     if (item.genre == null) categoryName,
   ];
+}
+
+class _HeroMetadataBadge extends StatelessWidget {
+  const _HeroMetadataBadge({
+    required this.value,
+    required this.isRating,
+  });
+
+  final String value;
+  final bool isRating;
+
+  @override
+  Widget build(BuildContext context) {
+    return FBadge(
+      variant: FBadgeVariant.secondary,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (isRating) ...[
+            const Icon(
+              FLucideIcons.star,
+              size: 12,
+              color: Color(0xFFFFD166),
+            ),
+            const SizedBox(width: 4),
+          ],
+          Text(value),
+        ],
+      ),
+    );
+  }
 }
 
 String? _yearFromDate(String? value) {
@@ -1474,24 +1534,124 @@ String? _yearFromDate(String? value) {
   return match?.group(0);
 }
 
+String? _mediaYear(MediaCatalogItem item) {
+  return _yearFromDate(item.releaseDate) ?? _yearFromDate(item.name);
+}
+
+String _displayMediaTitle(String value) {
+  final cleaned = value
+      .replaceAll(RegExp(r'\[[^\]]*\]'), ' ')
+      .replaceAll(RegExp(r'\([^)]*(19|20)\d{2}[^)]*\)'), ' ')
+      .replaceAll(RegExp(r'\(\s*\)'), ' ')
+      .replaceAll(RegExp(r'\[\s*\]'), ' ')
+      .replaceAll(RegExp(r'\b(19|20)\d{2}\b'), ' ')
+      .replaceAll(RegExp(r'\(\s*\)'), ' ')
+      .replaceAll(RegExp(r'\[\s*\]'), ' ')
+      .replaceAll(
+        RegExp(
+          r'\b(4k|uhd|fhd|hd|sd|hevc|x264|x265|bluray|web-dl)\b',
+          caseSensitive: false,
+        ),
+        ' ',
+      )
+      .replaceAll(RegExp(r'^[a-z]{2}\s*[-|]\s*', caseSensitive: false), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  return cleaned.isEmpty ? value : cleaned;
+}
+
+class _DetailTabBar extends StatelessWidget {
+  const _DetailTabBar({
+    required this.isSeries,
+    required this.detailsSelected,
+    required this.onDetailsChanged,
+  });
+
+  final bool isSeries;
+  final bool detailsSelected;
+  final ValueChanged<bool> onDetailsChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.26),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _DetailTabButton(
+              selected: !detailsSelected,
+              icon: isSeries ? FLucideIcons.listVideo : FLucideIcons.info,
+              label: isSeries ? 'Episodes' : 'Overview',
+              onPressed: () => onDetailsChanged(false),
+            ),
+            _DetailTabButton(
+              selected: detailsSelected,
+              icon: FLucideIcons.badgeInfo,
+              label: 'Details',
+              onPressed: () => onDetailsChanged(true),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _DetailTabButton extends StatelessWidget {
   const _DetailTabButton({
     required this.selected,
+    required this.icon,
     required this.label,
     required this.onPressed,
   });
 
   final bool selected;
+  final IconData icon;
   final String label;
   final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
-    return FButton(
-      variant: selected ? FButtonVariant.secondary : FButtonVariant.ghost,
-      size: FButtonSizeVariant.sm,
+    return FTappable(
       onPress: onPressed,
-      child: Text(label),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        curve: Curves.easeOutCubic,
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected
+              ? context.theme.colors.primary.withValues(alpha: 0.18)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 15,
+              color: selected
+                  ? context.theme.colors.primary
+                  : context.theme.colors.mutedForeground,
+            ),
+            const SizedBox(width: 7),
+            Text(
+              label,
+              style: context.theme.typography.sm.copyWith(
+                color: selected
+                    ? context.theme.colors.foreground
+                    : context.theme.colors.mutedForeground,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -1500,59 +1660,113 @@ class _MediaDetailsPanel extends StatelessWidget {
   const _MediaDetailsPanel({
     required this.item,
     required this.categoryName,
+    required this.onCreditPressed,
   });
 
   final MediaCatalogItem item;
   final String categoryName;
+  final ValueChanged<MediaCredit> onCreditPressed;
 
   @override
   Widget build(BuildContext context) {
-    final rows = [
-      if (item.rating != null) ('Ocjena', item.rating!),
+    final facts = [
       if (_yearFromDate(item.releaseDate) != null)
-        ('Godina', _yearFromDate(item.releaseDate)!),
-      ('Kategorija', item.genre ?? categoryName),
-      if (item.director != null) ('Režija', item.director!),
-      if (item.cast != null) ('Glumci', item.cast!),
-      if (item.metadataSource == 'tmdb') ('Izvor', 'TMDb'),
+        ('Godina', _yearFromDate(item.releaseDate)!, FLucideIcons.calendar),
     ];
-    final description = _mediaDetailDescription(
-      item,
-      item.containerExtension == null,
-    );
+    final genres = _splitGenres(item.genre ?? categoryName);
 
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 760),
-      child: FCard.raw(
-        style: _darkCardStyle(context, borderless: true),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              for (final row in rows) ...[
-                _DetailInfoRow(label: row.$1, value: row.$2),
-                const SizedBox(height: 10),
-              ],
-              if (description.isNotEmpty) ...[
-                Text(
-                  'Opis',
-                  style: context.theme.typography.xs.copyWith(
-                    color: context.theme.colors.mutedForeground,
-                    fontWeight: FontWeight.w800,
-                  ),
+    return Align(
+      alignment: Alignment.center,
+      child: FractionallySizedBox(
+        widthFactor: 1,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.22),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(18),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      alignment: WrapAlignment.start,
+                      children: [
+                        if (item.rating != null)
+                          _RatingFactChip(
+                            rating: item.rating!,
+                            source:
+                                item.metadataSource == 'tmdb' ? 'TMDb' : null,
+                          ),
+                        for (final fact in facts)
+                          _DetailFactChip(
+                            label: fact.$1,
+                            value: fact.$2,
+                            icon: fact.$3,
+                          ),
+                      ],
+                    ),
+                    if (genres.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      Text(
+                        'Žanr',
+                        textAlign: TextAlign.left,
+                        style: context.theme.typography.xs.copyWith(
+                          color: context.theme.colors.mutedForeground,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        alignment: WrapAlignment.start,
+                        children: [
+                          for (final genre in genres)
+                            _GenreChip(
+                              value: genre,
+                            ),
+                        ],
+                      ),
+                    ],
+                    if (item.credits.isNotEmpty) ...[
+                      const SizedBox(height: 18),
+                      const _DetailSectionLabel(value: 'Glumci'),
+                      const SizedBox(height: 8),
+                      _CastStrip(
+                        credits: item.credits,
+                        onCreditPressed: onCreditPressed,
+                      ),
+                    ],
+                    if (item.directors.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      const _DetailSectionLabel(value: 'Režija'),
+                      const SizedBox(height: 8),
+                      _CastStrip(
+                        credits: item.directors,
+                        onCreditPressed: onCreditPressed,
+                      ),
+                    ] else if (item.director != null) ...[
+                      const SizedBox(height: 16),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: _DetailFactChip(
+                          label: 'Režija',
+                          value: item.director!,
+                          icon: FLucideIcons.clapperboard,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
-                const SizedBox(height: 5),
-                Text(
-                  description,
-                  style: context.theme.typography.sm.copyWith(
-                    color: context.theme.colors.foreground,
-                    height: 1.35,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ],
+              ),
+            ),
           ),
         ),
       ),
@@ -1560,40 +1774,594 @@ class _MediaDetailsPanel extends StatelessWidget {
   }
 }
 
-class _DetailInfoRow extends StatelessWidget {
-  const _DetailInfoRow({
-    required this.label,
-    required this.value,
-  });
+class _DetailSectionLabel extends StatelessWidget {
+  const _DetailSectionLabel({required this.value});
 
-  final String label;
   final String value;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 92,
-          child: Text(
-            label,
-            style: context.theme.typography.xs.copyWith(
-              color: context.theme.colors.mutedForeground,
-              fontWeight: FontWeight.w800,
+    return Text(
+      value,
+      style: context.theme.typography.xs.copyWith(
+        color: context.theme.colors.mutedForeground,
+        fontWeight: FontWeight.w900,
+      ),
+    );
+  }
+}
+
+List<String> _splitGenres(String value) {
+  return value
+      .split(RegExp(r'\s*/\s*|,\s*|\s+&\s+'))
+      .map((genre) => genre.trim())
+      .where((genre) => genre.isNotEmpty)
+      .toList(growable: false);
+}
+
+class _DetailFactChip extends StatelessWidget {
+  const _DetailFactChip({
+    required this.label,
+    required this.value,
+    required this.icon,
+  });
+
+  final String label;
+  final String value;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.28),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 17,
+              color: context.theme.colors.primary,
+            ),
+            const SizedBox(width: 9),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: context.theme.typography.xs.copyWith(
+                    color: context.theme.colors.mutedForeground,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: context.theme.typography.sm.copyWith(
+                    color: context.theme.colors.foreground,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RatingFactChip extends StatelessWidget {
+  const _RatingFactChip({
+    required this.rating,
+    this.source,
+  });
+
+  final String rating;
+  final String? source;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.28),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              FLucideIcons.star,
+              size: 17,
+              color: Color(0xFFFFD166),
+            ),
+            const SizedBox(width: 9),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Ocjena',
+                  style: context.theme.typography.xs.copyWith(
+                    color: context.theme.colors.mutedForeground,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                Text(
+                  source == null ? rating : '$rating $source',
+                  style: context.theme.typography.sm.copyWith(
+                    color: context.theme.colors.foreground,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _GenreChip extends StatelessWidget {
+  const _GenreChip({
+    required this.value,
+  });
+
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.28),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              FLucideIcons.tags,
+              size: 14,
+              color: context.theme.colors.primary,
+            ),
+            const SizedBox(width: 7),
+            Text(
+              value,
+              style: context.theme.typography.sm.copyWith(
+                color: context.theme.colors.foreground,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CastStrip extends StatelessWidget {
+  const _CastStrip({
+    required this.credits,
+    required this.onCreditPressed,
+  });
+
+  final List<MediaCredit> credits;
+  final ValueChanged<MediaCredit> onCreditPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 232,
+      child: ListView.separated(
+        clipBehavior: Clip.none,
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+        scrollDirection: Axis.horizontal,
+        itemCount: credits.length,
+        separatorBuilder: (context, index) => const SizedBox(width: 10),
+        itemBuilder: (context, index) {
+          return _CastCreditCard(
+            credit: credits[index],
+            onPressed: () => onCreditPressed(credits[index]),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _CastCreditCard extends StatefulWidget {
+  const _CastCreditCard({
+    required this.credit,
+    required this.onPressed,
+  });
+
+  final MediaCredit credit;
+  final VoidCallback onPressed;
+
+  @override
+  State<_CastCreditCard> createState() => _CastCreditCardState();
+}
+
+class _CastCreditCardState extends State<_CastCreditCard> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final profileUrl = widget.credit.profileUrl;
+    final role = widget.credit.role;
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: AnimatedScale(
+        scale: _hovered ? 1.08 : 1,
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOutCubic,
+        child: SizedBox(
+          width: 136,
+          child: FCard.raw(
+            style: _darkCardStyle(
+              context,
+              hovered: _hovered,
+              borderless: true,
+            ),
+            child: FTappable(
+              onPress: widget.onPressed,
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: SizedBox(
+                        width: 120,
+                        height: 142,
+                        child: profileUrl == null
+                            ? _PersonImageFallback(
+                                iconSize: 34,
+                                color: context.theme.colors.mutedForeground,
+                              )
+                            : CachedNetworkImage(
+                                imageUrl: profileUrl,
+                                fit: BoxFit.cover,
+                                placeholder: (_, __) =>
+                                    const Center(child: FCircularProgress()),
+                                errorWidget: (_, __, ___) =>
+                                    _PersonImageFallback(
+                                  iconSize: 34,
+                                  color: context.theme.colors.mutedForeground,
+                                ),
+                              ),
+                      ),
+                    ),
+                    const SizedBox(height: 7),
+                    Text(
+                      widget.credit.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: context.theme.typography.xs.copyWith(
+                        color: context.theme.colors.foreground,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    if (role != null && role.isNotEmpty)
+                      Text(
+                        role,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: context.theme.typography.xs.copyWith(
+                          color: context.theme.colors.mutedForeground,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ),
           ),
         ),
-        Expanded(
-          child: Text(
-            value,
-            style: context.theme.typography.sm.copyWith(
-              color: context.theme.colors.foreground,
-              fontWeight: FontWeight.w700,
+      ),
+    );
+  }
+}
+
+class _PersonCreditsOverlay extends StatelessWidget {
+  const _PersonCreditsOverlay({
+    required this.credit,
+    required this.items,
+    required this.loading,
+    required this.onDismissed,
+  });
+
+  final MediaCredit credit;
+  final List<MediaCatalogItem>? items;
+  final bool loading;
+  final VoidCallback onDismissed;
+
+  @override
+  Widget build(BuildContext context) {
+    final role = credit.role;
+
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            onTap: onDismissed,
+            child: BackdropFilter(
+              filter: ui.ImageFilter.blur(sigmaX: 7, sigmaY: 7),
+              child: ColoredBox(
+                color: Colors.black.withValues(alpha: 0.62),
+              ),
+            ),
+          ),
+        ),
+        Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxWidth: 920,
+              maxHeight: 690,
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(18),
+              child: FCard.raw(
+                style: _darkCardStyle(context, borderless: true),
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(14),
+                            child: SizedBox(
+                              width: 118,
+                              height: 154,
+                              child: credit.profileUrl == null
+                                  ? _PersonImageFallback(
+                                      iconSize: 42,
+                                      color:
+                                          context.theme.colors.mutedForeground,
+                                    )
+                                  : CachedNetworkImage(
+                                      imageUrl: credit.profileUrl!,
+                                      fit: BoxFit.cover,
+                                      placeholder: (_, __) => const Center(
+                                        child: FCircularProgress(),
+                                      ),
+                                      errorWidget: (_, __, ___) =>
+                                          _PersonImageFallback(
+                                        iconSize: 42,
+                                        color: context
+                                            .theme.colors.mutedForeground,
+                                      ),
+                                    ),
+                            ),
+                          ),
+                          const SizedBox(width: 20),
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    credit.name,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: context.theme.typography.xl.copyWith(
+                                      color: context.theme.colors.foreground,
+                                      fontSize: 34,
+                                      fontWeight: FontWeight.w900,
+                                      height: 1.05,
+                                    ),
+                                  ),
+                                  if (role != null && role.isNotEmpty) ...[
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      role,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style:
+                                          context.theme.typography.sm.copyWith(
+                                        color: context
+                                            .theme.colors.mutedForeground,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                  const SizedBox(height: 16),
+                                  const Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: [
+                                      _GenreChip(value: 'TMDb'),
+                                      _GenreChip(value: 'Filmovi i serije'),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          FButton.icon(
+                            variant: FButtonVariant.ghost,
+                            onPress: onDismissed,
+                            child: const Icon(FLucideIcons.x, size: 21),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 22),
+                      Text(
+                        'Gdje je glumio',
+                        style: context.theme.typography.lg.copyWith(
+                          color: context.theme.colors.foreground,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: loading
+                            ? const Center(child: FCircularProgress())
+                            : _PersonCreditsGrid(items: items ?? const []),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
         ),
       ],
+    );
+  }
+}
+
+class _PersonCreditsGrid extends StatelessWidget {
+  const _PersonCreditsGrid({required this.items});
+
+  final List<MediaCatalogItem> items;
+
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) {
+      return Center(
+        child: Text(
+          'Nema TMDb uloga za prikaz.',
+          style: context.theme.typography.sm.copyWith(
+            color: context.theme.colors.mutedForeground,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      );
+    }
+
+    return GridView.builder(
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: 170,
+        mainAxisExtent: 318,
+        crossAxisSpacing: 12,
+        mainAxisSpacing: 12,
+      ),
+      itemCount: items.length,
+      itemBuilder: (context, index) {
+        return _PersonCreditMediaCard(item: items[index]);
+      },
+    );
+  }
+}
+
+class _PersonCreditMediaCard extends StatefulWidget {
+  const _PersonCreditMediaCard({required this.item});
+
+  final MediaCatalogItem item;
+
+  @override
+  State<_PersonCreditMediaCard> createState() => _PersonCreditMediaCardState();
+}
+
+class _PersonCreditMediaCardState extends State<_PersonCreditMediaCard> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final role = widget.item.role;
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.basic,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: AnimatedScale(
+        scale: _hovered ? 1.06 : 1,
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOutCubic,
+        child: FCard.raw(
+          style: _darkCardStyle(
+            context,
+            hovered: _hovered,
+            borderless: true,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  height: 218,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: _MediaPoster(item: widget.item, wide: false),
+                  ),
+                ),
+                const SizedBox(height: 7),
+                Text(
+                  _displayMediaTitle(widget.item.name),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: context.theme.typography.xs.copyWith(
+                    color: context.theme.colors.foreground,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                _MediaCardMeta(item: widget.item),
+                if (role != null && role.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    role,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: context.theme.typography.xs.copyWith(
+                      color: context.theme.colors.mutedForeground
+                          .withValues(alpha: 0.82),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PersonImageFallback extends StatelessWidget {
+  const _PersonImageFallback({
+    required this.iconSize,
+    required this.color,
+  });
+
+  final double iconSize;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.28),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Center(
+        child: Icon(
+          FLucideIcons.userRound,
+          color: color,
+          size: iconSize,
+        ),
+      ),
     );
   }
 }
@@ -1664,49 +2432,109 @@ class _SeriesEpisodesPanelState extends State<_SeriesEpisodesPanel> {
         .toList(growable: false)
       ..sort((a, b) => a.episodeNumber.compareTo(b.episodeNumber));
 
-    return Column(
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Text(
-              'Episodes',
-              style: context.theme.typography.sm.copyWith(
-                color: context.theme.colors.foreground,
-                fontWeight: FontWeight.w900,
+        SizedBox(
+          width: 132,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Sezone',
+                style: context.theme.typography.xs.copyWith(
+                  color: context.theme.colors.mutedForeground,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
+              const SizedBox(height: 10),
+              for (final season in seasons) ...[
+                _SeasonButton(
+                  season: season,
+                  selected: season == selectedSeason,
+                  onPressed: () => setState(
+                    () => _selectedSeason = season,
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(
+            children: [
+              for (final episode in episodes) ...[
+                Align(
+                  alignment: Alignment.center,
+                  child: _SeriesEpisodeTile(
+                    fallbackItem: widget.fallbackItem,
+                    episode: episode,
+                    onPressed: () => widget.onEpisodePressed(episode),
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SeasonButton extends StatelessWidget {
+  const _SeasonButton({
+    required this.season,
+    required this.selected,
+    required this.onPressed,
+  });
+
+  final int season;
+  final bool selected;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return FTappable(
+      onPress: onPressed,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        curve: Curves.easeOutCubic,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: selected
+              ? context.theme.colors.primary.withValues(alpha: 0.18)
+              : Colors.black.withValues(alpha: 0.20),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              FLucideIcons.layers,
+              size: 15,
+              color: selected
+                  ? context.theme.colors.primary
+                  : context.theme.colors.mutedForeground,
             ),
-            const Spacer(),
-            SizedBox(
-              width: 170,
-              child: FSelect<int>(
-                items: {
-                  for (final season in seasons) 'Season $season': season,
-                },
-                control: FSelectControl.managed(
-                  initial: selectedSeason,
-                  onChange: (value) {
-                    if (value != null) {
-                      setState(() => _selectedSeason = value);
-                    }
-                  },
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Season $season',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: context.theme.typography.xs.copyWith(
+                  color: selected
+                      ? context.theme.colors.foreground
+                      : context.theme.colors.mutedForeground,
+                  fontWeight: FontWeight.w800,
                 ),
               ),
             ),
           ],
         ),
-        const SizedBox(height: 10),
-        for (final episode in episodes) ...[
-          Align(
-            alignment: Alignment.center,
-            child: _SeriesEpisodeTile(
-              fallbackItem: widget.fallbackItem,
-              episode: episode,
-              onPressed: () => widget.onEpisodePressed(episode),
-            ),
-          ),
-          const SizedBox(height: 10),
-        ],
-      ],
+      ),
     );
   }
 }
@@ -1732,7 +2560,6 @@ class _SeriesEpisodeTileState extends State<_SeriesEpisodeTile> {
   @override
   Widget build(BuildContext context) {
     final episodeFacts = [
-      if (widget.episode.rating != null) widget.episode.rating!,
       if (_yearFromDate(widget.episode.releaseDate) != null)
         _yearFromDate(widget.episode.releaseDate)!,
       if (widget.episode.director != null)
@@ -1748,99 +2575,137 @@ class _SeriesEpisodeTileState extends State<_SeriesEpisodeTile> {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
         curve: Curves.easeOutCubic,
-        width: _hovered ? 860 : 760,
-        child: FCard.raw(
-          style: _darkCardStyle(
-            context,
-            hovered: _hovered,
-            borderless: true,
-          ),
-          child: FTappable(
-            onPress: widget.onPressed,
-            child: AnimatedPadding(
-              duration: const Duration(milliseconds: 160),
-              curve: Curves.easeOutCubic,
-              padding: EdgeInsets.all(_hovered ? 14 : 8),
-              child: Row(
-                children: [
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 160),
-                    curve: Curves.easeOutCubic,
-                    width: _hovered ? 154 : 132,
-                    height: _hovered ? 86 : 74,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: widget.episode.imageUrl == null
-                          ? _MediaPoster(item: widget.fallbackItem, wide: true)
-                          : CachedNetworkImage(
-                              imageUrl: widget.episode.imageUrl!,
-                              fit: BoxFit.cover,
-                              placeholder: (_, __) => _MediaPoster(
-                                item: widget.fallbackItem,
-                                wide: true,
-                              ),
-                              errorWidget: (_, __, ___) => _MediaPoster(
-                                item: widget.fallbackItem,
-                                wide: true,
+        width: _hovered ? 820 : 760,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: _hovered
+                    ? Colors.black.withValues(alpha: 0.30)
+                    : Colors.black.withValues(alpha: 0.20),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: FTappable(
+                onPress: widget.onPressed,
+                child: AnimatedPadding(
+                  duration: const Duration(milliseconds: 160),
+                  curve: Curves.easeOutCubic,
+                  padding: EdgeInsets.all(_hovered ? 18 : 14),
+                  child: Row(
+                    children: [
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 160),
+                        curve: Curves.easeOutCubic,
+                        width: _hovered ? 202 : 176,
+                        height: _hovered ? 116 : 102,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: widget.episode.imageUrl == null
+                              ? _MediaPoster(
+                                  item: widget.fallbackItem,
+                                  wide: true,
+                                )
+                              : CachedNetworkImage(
+                                  imageUrl: widget.episode.imageUrl!,
+                                  fit: BoxFit.cover,
+                                  placeholder: (_, __) => _MediaPoster(
+                                    item: widget.fallbackItem,
+                                    wide: true,
+                                  ),
+                                  errorWidget: (_, __, ___) => _MediaPoster(
+                                    item: widget.fallbackItem,
+                                    wide: true,
+                                  ),
+                                ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'S${widget.episode.seasonNumber.toString().padLeft(2, '0')}E${widget.episode.episodeNumber.toString().padLeft(2, '0')}',
+                              style: context.theme.typography.xs.copyWith(
+                                color: context.theme.colors.mutedForeground,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800,
                               ),
                             ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'S${widget.episode.seasonNumber.toString().padLeft(2, '0')}E${widget.episode.episodeNumber.toString().padLeft(2, '0')}',
-                          style: context.theme.typography.xs.copyWith(
-                            color: context.theme.colors.mutedForeground,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                        Text(
-                          widget.episode.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: context.theme.typography.sm.copyWith(
-                            color: context.theme.colors.foreground,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                        if (episodeFacts.isNotEmpty) ...[
-                          const SizedBox(height: 2),
-                          Text(
-                            episodeFacts.join('  •  '),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: context.theme.typography.xs.copyWith(
-                              color: context.theme.colors.mutedForeground,
+                            Text(
+                              widget.episode.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: context.theme.typography.sm.copyWith(
+                                color: context.theme.colors.foreground,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w900,
+                              ),
                             ),
-                          ),
-                        ],
-                        const SizedBox(height: 4),
-                        Text(
-                          widget.episode.plot ??
-                              'Opis epizode nije dostupan u listi.',
-                          maxLines: _hovered ? 3 : 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: context.theme.typography.xs.copyWith(
-                            color: context.theme.colors.mutedForeground,
-                            height: 1.35,
-                          ),
+                            if (widget.episode.rating != null) ...[
+                              const SizedBox(height: 3),
+                              Row(
+                                children: [
+                                  const Icon(
+                                    FLucideIcons.star,
+                                    size: 13,
+                                    color: Color(0xFFFFD166),
+                                  ),
+                                  const SizedBox(width: 5),
+                                  Text(
+                                    widget.episode.rating!,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: context.theme.typography.xs.copyWith(
+                                      color:
+                                          context.theme.colors.mutedForeground,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                            if (episodeFacts.isNotEmpty) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                episodeFacts.join('  •  '),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: context.theme.typography.xs.copyWith(
+                                  color: context.theme.colors.mutedForeground,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 4),
+                            Text(
+                              widget.episode.plot ??
+                                  'Opis epizode nije dostupan u listi.',
+                              maxLines: _hovered ? 4 : 3,
+                              overflow: TextOverflow.ellipsis,
+                              style: context.theme.typography.xs.copyWith(
+                                color: context.theme.colors.mutedForeground,
+                                fontSize: 13,
+                                height: 1.35,
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
+                      ),
+                      const SizedBox(width: 10),
+                      Icon(
+                        FLucideIcons.play,
+                        size: 18,
+                        color: _hovered
+                            ? context.theme.colors.primary
+                            : context.theme.colors.mutedForeground,
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 10),
-                  Icon(
-                    FLucideIcons.play,
-                    size: 18,
-                    color: _hovered
-                        ? context.theme.colors.primary
-                        : context.theme.colors.mutedForeground,
-                  ),
-                ],
+                ),
               ),
             ),
           ),
@@ -1988,6 +2853,7 @@ class _MediaLibraryBody extends StatelessWidget {
         return _MediaRail(
           rail: rail,
           categoryNames: categoryNames,
+          isMovie: isMovies,
           onItemPressed: onItemPressed,
           onViewAllPressed: () => onViewAllPressed(rail),
         );
@@ -2038,7 +2904,7 @@ class _ContinueWatchingRailState extends State<_ContinueWatchingRail> {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 204,
+      height: 340,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2126,7 +2992,7 @@ class _ContinueWatchingTileState extends State<_ContinueWatchingTile> {
 
   @override
   Widget build(BuildContext context) {
-    final width = _hovered ? 260.0 : 222.0;
+    final width = _hovered ? 182.0 : 164.0;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hovered = true),
@@ -2152,7 +3018,8 @@ class _ContinueWatchingTileState extends State<_ContinueWatchingTile> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
+                    SizedBox(
+                      height: 218,
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(8),
                         child: Stack(
@@ -2180,9 +3047,9 @@ class _ContinueWatchingTileState extends State<_ContinueWatchingTile> {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 6),
                     Text(
-                      widget.progress.item.name,
+                      _displayMediaTitle(widget.progress.item.name),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: context.theme.typography.xs.copyWith(
@@ -2190,14 +3057,8 @@ class _ContinueWatchingTileState extends State<_ContinueWatchingTile> {
                         fontWeight: FontWeight.w800,
                       ),
                     ),
-                    Text(
-                      _formatContinueProgress(widget.progress),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: context.theme.typography.xs.copyWith(
-                        color: context.theme.colors.mutedForeground,
-                      ),
-                    ),
+                    const SizedBox(height: 2),
+                    _MediaCardMeta(item: widget.progress.item),
                   ],
                 ),
               ),
@@ -2207,14 +3068,6 @@ class _ContinueWatchingTileState extends State<_ContinueWatchingTile> {
       ),
     );
   }
-}
-
-String _formatContinueProgress(WatchProgress progress) {
-  final position = _formatPlaybackTime(progress.position);
-  if (progress.duration.inSeconds <= 0) {
-    return position;
-  }
-  return '$position / ${_formatPlaybackTime(progress.duration)}';
 }
 
 List<_MediaRailData> _buildMediaRails(
@@ -2250,12 +3103,14 @@ class _MediaRail extends StatelessWidget {
   const _MediaRail({
     required this.rail,
     required this.categoryNames,
+    required this.isMovie,
     required this.onItemPressed,
     required this.onViewAllPressed,
   });
 
   final _MediaRailData rail;
   final Map<String, String> categoryNames;
+  final bool isMovie;
   final ValueChanged<MediaCatalogItem> onItemPressed;
   final VoidCallback onViewAllPressed;
 
@@ -2264,6 +3119,7 @@ class _MediaRail extends StatelessWidget {
     return _ScrollableMediaRail(
       rail: rail,
       categoryNames: categoryNames,
+      isMovie: isMovie,
       onItemPressed: onItemPressed,
       onViewAllPressed: onViewAllPressed,
     );
@@ -2274,12 +3130,14 @@ class _ScrollableMediaRail extends StatefulWidget {
   const _ScrollableMediaRail({
     required this.rail,
     required this.categoryNames,
+    required this.isMovie,
     required this.onItemPressed,
     required this.onViewAllPressed,
   });
 
   final _MediaRailData rail;
   final Map<String, String> categoryNames;
+  final bool isMovie;
   final ValueChanged<MediaCatalogItem> onItemPressed;
   final VoidCallback onViewAllPressed;
 
@@ -2315,7 +3173,7 @@ class _ScrollableMediaRailState extends State<_ScrollableMediaRail> {
   Widget build(BuildContext context) {
     final rail = widget.rail;
     return SizedBox(
-      height: rail.wide ? 194 : 238,
+      height: 340,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2372,8 +3230,7 @@ class _ScrollableMediaRailState extends State<_ScrollableMediaRail> {
               itemBuilder: (context, index) => _MediaTile(
                 item: rail.items[index],
                 wide: rail.wide,
-                subtitle: widget.categoryNames[rail.items[index].categoryId] ??
-                    rail.title,
+                isMovie: widget.isMovie,
                 onPressed: () => widget.onItemPressed(rail.items[index]),
               ),
             ),
@@ -2388,13 +3245,13 @@ class _MediaTile extends StatefulWidget {
   const _MediaTile({
     required this.item,
     required this.wide,
-    required this.subtitle,
+    required this.isMovie,
     required this.onPressed,
   });
 
   final MediaCatalogItem item;
   final bool wide;
-  final String subtitle;
+  final bool isMovie;
   final VoidCallback onPressed;
 
   @override
@@ -2405,10 +3262,41 @@ class _MediaTileState extends State<_MediaTile> {
   bool _hovered = false;
 
   @override
+  void initState() {
+    super.initState();
+    _queueMetadataEnrichment();
+  }
+
+  @override
+  void didUpdateWidget(covariant _MediaTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item.id != widget.item.id ||
+        oldWidget.isMovie != widget.isMovie) {
+      _queueMetadataEnrichment();
+    }
+  }
+
+  void _queueMetadataEnrichment() {
+    if (widget.item.metadataSource == 'tmdb') {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      unawaited(
+        context.read<IptvProvider>().enrichMediaMetadata(
+              item: widget.item,
+              isMovie: widget.isMovie,
+            ),
+      );
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final baseWidth = widget.wide ? 222.0 : 128.0;
-    final width = _hovered ? baseWidth * 1.25 : baseWidth;
-    final posterFlex = widget.wide ? 5 : 7;
+    const baseWidth = 164.0;
+    final width = _hovered ? 182.0 : baseWidth;
 
     return MouseRegion(
       cursor: SystemMouseCursors.click,
@@ -2419,7 +3307,7 @@ class _MediaTileState extends State<_MediaTile> {
         curve: Curves.easeOutCubic,
         width: width,
         child: AnimatedScale(
-          scale: _hovered ? 1.1 : 1,
+          scale: _hovered ? 1.06 : 1,
           duration: const Duration(milliseconds: 160),
           curve: Curves.easeOutCubic,
           child: FCard.raw(
@@ -2435,44 +3323,28 @@ class _MediaTileState extends State<_MediaTile> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      flex: posterFlex,
+                    SizedBox(
+                      height: 218,
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(8),
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            _MediaPoster(item: widget.item, wide: widget.wide),
-                            if (widget.item.rating != null)
-                              Positioned(
-                                top: 8,
-                                right: 8,
-                                child: FBadge(
-                                  child: Text(widget.item.rating!),
-                                ),
-                              ),
-                          ],
+                        child: _MediaPoster(
+                          item: widget.item,
+                          wide: widget.wide,
                         ),
                       ),
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      widget.item.name,
-                      maxLines: widget.wide ? 1 : 2,
+                      _displayMediaTitle(widget.item.name),
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: context.theme.typography.xs.copyWith(
                         color: context.theme.colors.foreground,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
-                    Text(
-                      widget.subtitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: context.theme.typography.xs.copyWith(
-                        color: context.theme.colors.mutedForeground,
-                      ),
-                    ),
+                    const SizedBox(height: 2),
+                    _MediaCardMeta(item: widget.item),
                   ],
                 ),
               ),
@@ -2487,11 +3359,13 @@ class _MediaTileState extends State<_MediaTile> {
 class _MediaViewAllOverlay extends StatelessWidget {
   const _MediaViewAllOverlay({
     required this.rail,
+    required this.isMovie,
     required this.onDismissed,
     required this.onItemPressed,
   });
 
   final _MediaRailData rail;
+  final bool isMovie;
   final VoidCallback onDismissed;
   final ValueChanged<MediaCatalogItem> onItemPressed;
 
@@ -2555,8 +3429,8 @@ class _MediaViewAllOverlay extends StatelessWidget {
                           itemCount: rail.items.length,
                           gridDelegate:
                               const SliverGridDelegateWithMaxCrossAxisExtent(
-                            maxCrossAxisExtent: 150,
-                            mainAxisExtent: 246,
+                            maxCrossAxisExtent: 166,
+                            mainAxisExtent: 318,
                             mainAxisSpacing: 14,
                             crossAxisSpacing: 14,
                           ),
@@ -2564,6 +3438,7 @@ class _MediaViewAllOverlay extends StatelessWidget {
                             final item = rail.items[index];
                             return _MediaGridTile(
                               item: item,
+                              isMovie: isMovie,
                               onPressed: () => onItemPressed(item),
                             );
                           },
@@ -2584,10 +3459,12 @@ class _MediaViewAllOverlay extends StatelessWidget {
 class _MediaGridTile extends StatefulWidget {
   const _MediaGridTile({
     required this.item,
+    required this.isMovie,
     required this.onPressed,
   });
 
   final MediaCatalogItem item;
+  final bool isMovie;
   final VoidCallback onPressed;
 
   @override
@@ -2598,13 +3475,45 @@ class _MediaGridTileState extends State<_MediaGridTile> {
   bool _hovered = false;
 
   @override
+  void initState() {
+    super.initState();
+    _queueMetadataEnrichment();
+  }
+
+  @override
+  void didUpdateWidget(covariant _MediaGridTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item.id != widget.item.id ||
+        oldWidget.isMovie != widget.isMovie) {
+      _queueMetadataEnrichment();
+    }
+  }
+
+  void _queueMetadataEnrichment() {
+    if (widget.item.metadataSource == 'tmdb') {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      unawaited(
+        context.read<IptvProvider>().enrichMediaMetadata(
+              item: widget.item,
+              isMovie: widget.isMovie,
+            ),
+      );
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: AnimatedScale(
-        scale: _hovered ? 1.1 : 1,
+        scale: _hovered ? 1.06 : 1,
         duration: const Duration(milliseconds: 160),
         curve: Curves.easeOutCubic,
         child: FCard.raw(
@@ -2620,35 +3529,25 @@ class _MediaGridTileState extends State<_MediaGridTile> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
+                  SizedBox(
+                    height: 218,
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(8),
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          _MediaPoster(item: widget.item, wide: false),
-                          if (widget.item.rating != null)
-                            Positioned(
-                              top: 8,
-                              right: 8,
-                              child: FBadge(
-                                child: Text(widget.item.rating!),
-                              ),
-                            ),
-                        ],
-                      ),
+                      child: _MediaPoster(item: widget.item, wide: false),
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 6),
                   Text(
-                    widget.item.name,
-                    maxLines: 2,
+                    _displayMediaTitle(widget.item.name),
+                    maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: context.theme.typography.xs.copyWith(
                       color: context.theme.colors.foreground,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
+                  const SizedBox(height: 2),
+                  _MediaCardMeta(item: widget.item),
                 ],
               ),
             ),
@@ -2672,15 +3571,79 @@ class _MediaPoster extends StatelessWidget {
   Widget build(BuildContext context) {
     final posterUrl = item.posterUrl;
     if (posterUrl != null) {
-      return CachedNetworkImage(
-        imageUrl: posterUrl,
-        fit: BoxFit.cover,
-        placeholder: (_, __) => const Center(child: FCircularProgress()),
-        errorWidget: (_, __, ___) => _PosterFallback(item: item, wide: wide),
+      return ColoredBox(
+        color: Colors.black.withValues(alpha: 0.24),
+        child: SizedBox.expand(
+          child: CachedNetworkImage(
+            imageUrl: posterUrl,
+            fit: BoxFit.cover,
+            placeholder: (_, __) => const Center(child: FCircularProgress()),
+            errorWidget: (_, __, ___) =>
+                _PosterFallback(item: item, wide: wide),
+          ),
+        ),
       );
     }
 
     return _PosterFallback(item: item, wide: wide);
+  }
+}
+
+class _MediaCardMeta extends StatelessWidget {
+  const _MediaCardMeta({
+    required this.item,
+  });
+
+  final MediaCatalogItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final year = _mediaYear(item);
+    if (item.rating == null && year == null) {
+      return const SizedBox(height: 14);
+    }
+
+    return Row(
+      children: [
+        if (year != null)
+          Text(
+            year,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: context.theme.typography.xs.copyWith(
+              color: context.theme.colors.mutedForeground,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        if (year != null && item.rating != null) ...[
+          const SizedBox(width: 7),
+          Text(
+            '•',
+            style: context.theme.typography.xs.copyWith(
+              color: context.theme.colors.mutedForeground,
+            ),
+          ),
+          const SizedBox(width: 7),
+        ],
+        if (item.rating != null) ...[
+          const Icon(
+            FLucideIcons.star,
+            size: 12,
+            color: Color(0xFFFFD166),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            item.rating!,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: context.theme.typography.xs.copyWith(
+              color: context.theme.colors.mutedForeground,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ],
+    );
   }
 }
 
